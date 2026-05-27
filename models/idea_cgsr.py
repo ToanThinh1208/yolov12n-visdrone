@@ -28,7 +28,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ultralytics import YOLO
-from ultralytics.utils.ops import non_max_suppression
+from ultralytics.utils.nms import non_max_suppression
 
 from models.base_model import BaseModel
 
