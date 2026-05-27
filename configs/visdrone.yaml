@@ -3,10 +3,10 @@
 # Chuẩn bị dataset: chạy scripts/prepare_visdrone.py
 # =============================================================================
 
-path: datasets/visdrone      # root directory của dataset (relative to project root)
-train: train/images          # thư mục ảnh train
-val:   val/images            # thư mục ảnh val
-test:  test/images           # thư mục ảnh test (VisDrone2019-DET-test-challenge)
+path: datasets/VisDrone      # root directory của dataset (relative to project root)
+train: images/train          # thư mục ảnh train
+val:   images/val            # thư mục ảnh val
+test:  images/test           # thư mục ảnh test (VisDrone2019-DET-test-challenge)
 
 # ── Classes ──────────────────────────────────────────────────────────────────
 nc: 10
