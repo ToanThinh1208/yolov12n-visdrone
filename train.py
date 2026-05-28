@@ -226,6 +226,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.log_file is None:
+        args.log_file = f"logs/{args.model}_{args.idea}.log"
     setup_logging(args.log_level, args.log_file)
 
     logger.info("=" * 60)
