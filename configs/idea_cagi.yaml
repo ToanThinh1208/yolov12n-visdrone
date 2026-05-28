@@ -10,3 +10,10 @@ cagi_easy_threshold: 0.4
 cagi_hard_threshold: 0.7
 cagi_scp_hidden_dim: 64
 cagi_budget_lambda: 0.1
+cagi_gated_stage_idx: 4
+
+# Path tới best.pt của teacher đã train sẵn.
+# - Có path → bỏ qua stage 1, dùng luôn weights này để vào stage 3.
+# - null    → train YOLOv12n từ đầu (stage 1) rồi mới vào stage 3.
+cagi_teacher_weights: null
+# cagi_teacher_weights: "runs/detect/yolov12n_cagi_teacher/weights/best.pt"
