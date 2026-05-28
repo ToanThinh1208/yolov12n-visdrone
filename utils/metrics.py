@@ -399,14 +399,30 @@ def print_full_report(
 # CSV logger
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Schema cố định — thứ tự và tên cột không đổi giữa các lần ghi
+_CSV_COLUMNS: list[str] = [
+    # ── Meta ────────────────────────────────────────────────────────────────
+    "timestamp", "epoch", "split", "model", "idea",
+    # ── Accuracy ────────────────────────────────────────────────────────────
+    "acc_map50", "acc_map50_95", "acc_precision", "acc_recall", "acc_ar",
+    # ── Efficiency ──────────────────────────────────────────────────────────
+    "eff_params_m", "eff_gflops", "eff_model_size_mb",
+    "eff_latency_ms", "eff_fps", "eff_fps_batch", "eff_device_used",
+    # ── Ratios ──────────────────────────────────────────────────────────────
+    "ratio_map50_per_gflop", "ratio_map50_per_param_m", "ratio_map50_x_fps",
+]
+
+
 def save_metrics_csv(
     report: Dict[str, Any],
     csv_path: str | Path,
+    epoch: Optional[int] = None,
 ) -> None:
     """
-    Ghi kết quả metrics vào CSV để so sánh nhiều experiments.
+    Ghi kết quả metrics vào CSV với schema cố định (_CSV_COLUMNS).
 
     Mỗi lần gọi append 1 dòng. Tạo file mới + header nếu chưa có.
+    Cột nào không có dữ liệu để trống — không bao giờ lệch cột.
     """
     import csv
     import datetime
@@ -414,23 +430,26 @@ def save_metrics_csv(
     csv_path = Path(csv_path)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
 
-    flat = {
-        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        **report,
-    }
+    # Flatten report, bỏ dict (per-class AP)
+    flat = {k: v for k, v in report.items() if not isinstance(v, dict)}
 
-    # Bỏ các key chứa dict (per-class) — không phù hợp với CSV flat
-    flat_clean = {
-        k: v for k, v in flat.items()
-        if not isinstance(v, dict)
-    }
+    ep = epoch if epoch is not None else flat.get("epoch")
+
+    row: Dict[str, Any] = {col: "" for col in _CSV_COLUMNS}   # default rỗng
+    row["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    row["epoch"]     = ep if ep is not None else ""
+
+    # Điền từng cột có trong report
+    for col in _CSV_COLUMNS:
+        if col in flat and flat[col] is not None:
+            row[col] = flat[col]
 
     write_header = not csv_path.exists()
 
     with open(csv_path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(flat_clean.keys()))
+        writer = csv.DictWriter(f, fieldnames=_CSV_COLUMNS, extrasaction="ignore")
         if write_header:
             writer.writeheader()
-        writer.writerow(flat_clean)
+        writer.writerow(row)
 
     logger.info(f"[metrics] Results appended to: {csv_path}")

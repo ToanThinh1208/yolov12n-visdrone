@@ -26,7 +26,15 @@ def setup_logging(log_level: str = "INFO", log_file: str | None = None) -> None:
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     if log_file:
         Path(log_file).parent.mkdir(parents=True, exist_ok=True)
-        handlers.append(logging.FileHandler(log_file))
+        file_handler = logging.FileHandler(log_file)
+        handlers.append(file_handler)
+
+    fmt = logging.Formatter(
+        "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    for h in handlers:
+        h.setFormatter(fmt)
 
     logging.basicConfig(
         level=getattr(logging, log_level.upper(), logging.INFO),
@@ -34,6 +42,14 @@ def setup_logging(log_level: str = "INFO", log_file: str | None = None) -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=handlers,
     )
+
+    # Redirect ultralytics LOGGER vào file để capture epoch/val output
+    if log_file:
+        ul_logger = logging.getLogger("ultralytics")
+        ul_logger.propagate = False          # tránh double-print lên console
+        for h in handlers:
+            ul_logger.addHandler(h)
+        ul_logger.setLevel(logging.INFO)
 
 
 logger = logging.getLogger(__name__)
@@ -113,25 +129,51 @@ def make_test_callback(model, data_cfg: str, cfg: DictConfig, weights_path: str 
 
         logger.info(f"[TEST] Epoch {epoch} — running test split với full metrics…")
         try:
-            # ── Accuracy: chạy val trên test split ──────────────────────────
-            val_results = model.val(
-                data   = data_cfg,
-                split  = str(cfg.get("test_split", "test")),
-                imgsz  = int(cfg.get("imgsz", 640)),
-                device = str(cfg.get("device", "")),
-                conf   = float(cfg.get("val_conf", 0.001)),
-                iou    = float(cfg.get("val_iou",  0.6)),
+            # Resolve checkpoint path trước để dùng cho cả val lẫn efficiency
+            try:
+                best_pt = str(trainer.best) if hasattr(trainer, "best") else weights_path
+                if not best_pt or not Path(best_pt).exists():
+                    last_pt = str(trainer.last) if hasattr(trainer, "last") else ""
+                    best_pt = last_pt if last_pt and Path(last_pt).exists() else ""
+            except Exception:
+                best_pt = weights_path
+
+            # ── Accuracy: load fresh model từ checkpoint để tránh
+            #    inference_mode contaminating GradScaler._scale trên PyTorch 2.12+
+            from ultralytics import YOLO as _YOLO
+            _val_src = best_pt if best_pt and Path(best_pt).exists() else model.pretrained
+            _tmp = _YOLO(str(_val_src))
+
+            # Val output → <experiment_dir>/val/  (không rải ra runs/detect/val*)
+            _exp_dir = str(trainer.save_dir) if hasattr(trainer, "save_dir") else "runs"
+            val_results = _tmp.val(
+                data     = data_cfg,
+                split    = str(cfg.get("test_split", "test")),
+                imgsz    = int(cfg.get("imgsz", 640)),
+                device   = str(cfg.get("device", "")),
+                conf     = float(cfg.get("val_conf", 0.001)),
+                iou      = float(cfg.get("val_iou",  0.6)),
+                project  = _exp_dir,
+                name     = "val",
+                exist_ok = True,
             )
+            del _tmp
+
+            # Reset GradScaler sau val để đảm bảo _scale tensor không bị
+            # nhiễm inference_mode metadata (PyTorch 2.12 regression)
+            try:
+                from ultralytics.utils.torch_utils import TORCH_2_4
+                import torch as _torch
+                trainer.scaler = (
+                    _torch.amp.GradScaler("cuda", enabled=trainer.amp) if TORCH_2_4
+                    else _torch.cuda.amp.GradScaler(enabled=trainer.amp)
+                )
+            except Exception:
+                pass
 
             # ── Efficiency: đo từ best.pt hiện tại hoặc weights_path ────────
             eff: dict = {}
             if measure_eff:
-                # Tìm best.pt từ trainer nếu có
-                try:
-                    best_pt = str(trainer.best) if hasattr(trainer, "best") else weights_path
-                except Exception:
-                    best_pt = weights_path
-
                 if best_pt:
                     logger.info(f"[TEST] Measuring efficiency from: {best_pt}")
                     eff = compute_efficiency_metrics(
@@ -151,11 +193,9 @@ def make_test_callback(model, data_cfg: str, cfg: DictConfig, weights_path: str 
                 idea            = idea,
                 logger_instance = logger,
             )
-            report["epoch"] = epoch
-
             # ── Lưu CSV để so sánh experiments ──────────────────────────────
             try:
-                save_metrics_csv(report, save_csv)
+                save_metrics_csv(report, save_csv, epoch=epoch)
             except Exception as csv_err:
                 logger.debug(f"[TEST] CSV save failed: {csv_err}")
 
@@ -163,6 +203,55 @@ def make_test_callback(model, data_cfg: str, cfg: DictConfig, weights_path: str 
             logger.warning(f"[TEST] Test run failed at epoch {epoch}: {e}")
 
     return on_train_epoch_end
+
+
+# ── Per-epoch metrics logger ─────────────────────────────────────────────────
+
+def make_epoch_log_callback(total_epochs: int):
+    """
+    Callback ghi metrics từng epoch vào logger:
+        box_loss | cls_loss | dfl_loss | mAP50 | mAP50-95 | lr
+    Gọi vào sự kiện on_fit_epoch_end (sau cả train lẫn val).
+    """
+    def on_fit_epoch_end(trainer) -> None:
+        epoch = trainer.epoch + 1
+
+        # ── Losses (trung bình toàn epoch) ──────────────────────────────────
+        tloss = trainer.tloss
+        if tloss is not None:
+            try:
+                loss_vals = tloss.tolist() if hasattr(tloss, "tolist") else list(tloss)
+                box_l, cls_l, dfl_l = (loss_vals + [0, 0, 0])[:3]
+                loss_str = f"box={box_l:.4f}  cls={cls_l:.4f}  dfl={dfl_l:.4f}"
+            except Exception:
+                loss_str = f"loss={tloss}"
+        else:
+            loss_str = "loss=N/A"
+
+        # ── Val metrics ──────────────────────────────────────────────────────
+        metrics = trainer.metrics or {}
+        map50    = metrics.get("metrics/mAP50(B)",    metrics.get("mAP50",    None))
+        map5095  = metrics.get("metrics/mAP50-95(B)", metrics.get("mAP50-95", None))
+        prec     = metrics.get("metrics/precision(B)", None)
+        rec      = metrics.get("metrics/recall(B)",    None)
+
+        def _fmt(v):
+            return f"{v:.4f}" if v is not None else "  N/A"
+
+        metric_str = (
+            f"P={_fmt(prec)}  R={_fmt(rec)}  "
+            f"mAP50={_fmt(map50)}  mAP50-95={_fmt(map5095)}"
+        )
+
+        # ── Learning rate (pg0) ──────────────────────────────────────────────
+        lr_val = list((trainer.lr or {}).values())
+        lr_str = f"lr={lr_val[0]:.6f}" if lr_val else ""
+
+        logger.info(
+            f"[EPOCH {epoch:>3}/{total_epochs}]  {loss_str}  |  {metric_str}  |  {lr_str}"
+        )
+
+    return on_fit_epoch_end
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
@@ -283,9 +372,9 @@ def main() -> None:
     exp_name_early    = str(cfg.get("name", f"{cfg.model}_{cfg.idea}"))
     expected_best_pt  = f"{project_dir_early}/{exp_name_early}/weights/best.pt"
 
-    # Lưu metrics_csv path vào config nếu chưa có
+    # Lưu metrics_csv path vào config nếu chưa có — đặt tên theo idea
     if not cfg.get("metrics_csv"):
-        cfg.metrics_csv = f"{project_dir_early}/metrics.csv"
+        cfg.metrics_csv = f"{project_dir_early}/metrics_{cfg.idea}.csv"
 
     test_cb = make_test_callback(model, data_cfg, cfg, weights_path=expected_best_pt)
     if test_cb is not None:
@@ -294,6 +383,10 @@ def main() -> None:
             f"[TEST] Test callback registered: every {cfg.test_every_n_epochs} epochs"
         )
         logger.info(f"[TEST] Metrics CSV → {cfg.metrics_csv}")
+
+    # Epoch metrics logger — ghi loss + mAP mỗi epoch vào log file
+    epoch_log_cb = make_epoch_log_callback(total_epochs=int(cfg.get("epochs", 100)))
+    model.yolo.add_callback("on_fit_epoch_end", epoch_log_cb)
 
     # ── 5. Train ─────────────────────────────────────────────────────────────
     experiment_name = cfg.get("name", f"{cfg.model}_{cfg.idea}")
