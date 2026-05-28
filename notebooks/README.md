@@ -1,7 +1,7 @@
 # Notebooks — Hướng dẫn sử dụng trên Google Colab
 
-Thư mục này chứa **6 Jupyter notebooks**, mỗi notebook dành cho một idea nghiên cứu.
-Tất cả được thiết kế để chạy trực tiếp trên **Google Colab** với GPU miễn phí (T4).
+Thư mục này chứa **1 Jupyter notebook** để train và đánh giá mô hình trên Google Colab.
+Được thiết kế để chạy trực tiếp trên **Google Colab** với GPU miễn phí (T4).
 
 ---
 
@@ -10,14 +10,9 @@ Tất cả được thiết kế để chạy trực tiếp trên **Google Colab
 | File | Idea | Mô tả ngắn | Thời gian ước tính |
 |------|------|------------|-------------------|
 | `train_baseline.ipynb` | Baseline | YOLOv12n chuẩn, không modification | ~2–3h (T4) |
-| `train_cagi.ipynb` | CAGI | Gate C3k2 blocks theo scene complexity | ~3–4h (T4) |
-| `train_amsha.ipynb` | AMSHA | Bật/tắt P2 head theo small-object predictor | ~2.5–3.5h (T4) |
-| `train_rsfe.ipynb` | RSFE | Sparse attention trên top-K spatial locations | ~2–3h (T4) |
-| `train_cgsr.ipynb` | CGSR | 2-pass inference: nano + selective re-detect | ~2–3h (T4) |
-| `train_iawr.ipynb` | IAWR | OFA supernet 4 widths + Content Router | ~6–8h (T4) |
 
-> **Khuyến nghị**: Chạy `train_baseline.ipynb` trước để có reference mAP,
-> sau đó lần lượt chạy các ideas để so sánh.
+> **Khuyến nghị**: Chạy `train_baseline.ipynb` để có reference mAP trước khi
+> thử các idea khác.
 
 ---
 
@@ -28,9 +23,9 @@ Tất cả được thiết kế để chạy trực tiếp trên **Google Colab
 - **Colab Pro** (~$10/tháng): A100 GPU, runtime lâu hơn → khuyến nghị cho IAWR
 
 ### 2. Google Drive
-Cần ~**30 GB** dung lượng Drive trống cho:
+Cần ~**10 GB** dung lượng Drive trống cho:
 - Dataset VisDrone (~5 GB)
-- 6 experiment results (~3–5 GB mỗi cái)
+- Experiment results (~3–5 GB)
 
 ### 3. Project code
 Chuẩn bị **một trong ba cách** upload code lên Colab (xem chi tiết ở mục bên dưới):
@@ -246,9 +241,6 @@ Ví dụ output:
 ```
 model     idea      split  acc_map50  acc_map50_95  eff_gflops  eff_params_m  eff_fps  ratio_map50_per_gflop
 YOLOv12n  baseline  test      0.2301        0.1182        8.70         2.623     81.3                 0.0265
-YOLOv12n  cagi      test      0.2289        0.1174        5.20         2.701     94.7                 0.0440
-YOLOv12n  amsha     test      0.2318        0.1193        7.10         2.631     87.2                 0.0326
-YOLOv12n  rsfe      test      0.2334        0.1204        8.70         2.718     79.8                 0.0268
 ```
 
 ---
@@ -304,11 +296,6 @@ Dùng YOLOv8n làm pretrained tạm:
 
 ```
 1. train_baseline.ipynb   → lấy reference mAP (~23%) và FPS (~80)
-2. train_rsfe.ipynb       → nhẹ nhất, ít thay đổi nhất, dễ so sánh
-3. train_amsha.ipynb      → tiết kiệm FLOPs rõ rệt, dễ train
-4. train_cagi.ipynb       → phức tạp hơn, cần theo dõi complexity log
-5. train_cgsr.ipynb       → train như baseline, khác biệt ở inference
-6. train_iawr.ipynb       → phức tạp nhất, train lâu nhất (dùng Colab Pro)
 ```
 
 ---
@@ -321,14 +308,11 @@ MyDrive/yolov12n-visdrone/
 │   ├── VisDrone_raw/        # Dataset gốc (giải nén từ zip)
 │   └── VisDrone/            # YOLO format (auto-tạo)
 ├── runs/
-│   ├── yolov12n_baseline/   # Kết quả training baseline
-│   │   ├── weights/
-│   │   │   ├── best.pt      # Model tốt nhất
-│   │   │   └── last.pt      # Model epoch cuối
-│   │   ├── results.png      # Training curves
-│   │   └── results.csv      # Per-epoch metrics
-│   ├── yolov12n_cagi/
-│   ├── yolov12n_amsha/
-│   └── ...
-└── metrics.csv              # Tổng hợp tất cả experiments
+│   └── yolov12n_baseline/   # Kết quả training baseline
+│       ├── weights/
+│       │   ├── best.pt      # Model tốt nhất
+│       │   └── last.pt      # Model epoch cuối
+│       ├── results.png      # Training curves
+│       └── results.csv      # Per-epoch metrics
+└── metrics.csv              # Tổng hợp experiments
 ```
