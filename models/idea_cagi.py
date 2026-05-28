@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional
 
 import torch
 import torch.nn as nn
@@ -145,13 +145,22 @@ def _make_finetune_trainer_class(
             return det_loss, loss_items
 
     class CAGIFineTuneTrainer(DetectionTrainer):
-        def _setup_train(self, world_size):
-            super()._setup_train(world_size)
+        def _setup_train(self, *args, **kwargs):
+            super()._setup_train(*args, **kwargs)
 
             dev = next(self.model.parameters()).device
             scp.to(dev)
             scp_optim_ref[0] = torch.optim.Adam(scp.parameters(), lr=1e-4)
             logger.info(f"[CAGI Stage3] SCP moved to {dev}, Adam lr=1e-4")
+
+            # criterion có thể chưa được set bởi super() ở một số ultralytics version
+            if not hasattr(self, "criterion") or self.criterion is None:
+                try:
+                    self.criterion = self.model.init_criterion()
+                    logger.info("[CAGI Stage3] criterion khởi tạo thủ công qua init_criterion()")
+                except Exception as e:
+                    logger.warning(f"[CAGI Stage3] Không thể init criterion: {e} — budget loss inactive")
+                    return
 
             self.criterion = _BudgetCriterion(self.criterion)
             logger.info(
