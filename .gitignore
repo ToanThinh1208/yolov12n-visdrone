@@ -2,6 +2,7 @@
 # Datasets — không push lên git
 # =====================
 datasets/
+paper/
 
 # Python
 __pycache__/

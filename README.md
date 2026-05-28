@@ -107,7 +107,7 @@ path: datasets/VisDrone    # hoặc đường dẫn tuyệt đối
 ### Baseline (YOLOv12n chuẩn)
 
 ```bash
-python train.py --model yolov12n --idea baseline
+python train.py --model yolov12n --idea baseline --logs 
 ```
 
 ### Các ideas
@@ -134,7 +134,7 @@ python train.py --model yolov12n --idea iawr
 ```bash
 # Override epochs, batch size, device
 python train.py --model yolov12n --idea cagi \
-    --epochs 150 --batch 32 --device cuda:0
+    --epochs 150 --batch 32 --device cuda:0 
 
 # Custom config file
 python train.py --config configs/my_experiment.yaml
@@ -155,15 +155,14 @@ python train.py --idea baseline --test-every 5
 ---
 
 ## Validation
-
 ```bash
 # Val split (mặc định) — in full metrics report
 python val.py \
-    --weights runs/train/yolov12n_baseline/weights/best.pt
+    --weights runs/detect/runs/train/yolov12n_baseline/weights/best.pt
 
 # Test split
 python val.py \
-    --weights runs/train/yolov12n_baseline/weights/best.pt \
+    --weights runs/detect/runs/train/yolov12n_baseline/weights/best.pt \
     --split test
 
 # Tùy chỉnh threshold
