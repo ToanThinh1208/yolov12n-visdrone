@@ -95,17 +95,27 @@ def _make_vsod_trainer_class(wiou_alpha: float = 2.0, wiou_beta: float = 0.6):
         def _setup_train(self, *args, **kwargs):
             super()._setup_train(*args, **kwargs)
 
-            # Patch bbox_loss để dùng WIoU focusing
-            if self.criterion is not None:
+            # ultralytics 8.x: criterion có thể chưa tồn tại hoặc tên khác
+            criterion = getattr(self, "criterion", None)
+
+            # Fallback: thử init criterion thủ công nếu chưa có
+            if criterion is None:
                 try:
-                    self._patch_wiou(self.criterion, wiou_alpha, wiou_beta)
-                    logger.info(
-                        f"[VSOD] WIoU loss patched — alpha={wiou_alpha}, beta={wiou_beta}"
-                    )
+                    criterion = self.model.init_criterion()
+                    self.criterion = criterion
+                    logger.info("[VSOD] criterion khởi tạo thủ công")
                 except Exception as e:
-                    logger.warning(f"[VSOD] WIoU patch failed: {e} — dùng CIoU mặc định")
-            else:
-                logger.warning("[VSOD] criterion chưa được init — WIoU skipped")
+                    logger.warning(f"[VSOD] Không thể init criterion: {e} — WIoU skipped")
+                    return
+
+            # Patch bbox_loss để dùng WIoU focusing
+            try:
+                self._patch_wiou(criterion, wiou_alpha, wiou_beta)
+                logger.info(
+                    f"[VSOD] WIoU loss patched — alpha={wiou_alpha}, beta={wiou_beta}"
+                )
+            except Exception as e:
+                logger.warning(f"[VSOD] WIoU patch failed: {e} — dùng CIoU mặc định")
 
         @staticmethod
         def _patch_wiou(criterion, alpha: float, beta: float) -> None:

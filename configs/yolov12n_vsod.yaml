@@ -1,77 +1,73 @@
-# configs/yolov12n_vsod.yaml
+# configs/yolov12n_vsod.yaml  —  VSOD v4 (fixed args format)
 # =============================================================================
-# VSOD: VisDrone-Specialized Object Detector
-# =============================================================================
+# ROOT CAUSE CUỐI CÙNG:
+#   parse_model TỰ CHÈN outer-n vào args[2].
+#   Nếu args = [c2, n, c3k, e], sau chèn thành [c1, c2, n_outer, n_inner, c3k, e]
+#   → c3k = n_inner (truthy int), e = c3k (False → 0)
+#   → self.c = int(c2 * 0) = 0 → PSABlock(0) → key_dim=0 → ZeroDivisionError!
 #
-# Target: ~46-51% mAP50 trên VisDrone (baseline: 26.28%)
-# Params: ~2.85M (+11% từ 2.57M baseline) — vẫn nano-class
+# FIX: KHÔNG để explicit n trong args — dùng cột n ngoài để parse_model tự chèn.
+#   WRONG: [-1, 1, C3k2, [64, 1, False, 0.25]]
+#          → parse_model inserts n=1 → C3k2(c1, 64, 1, 1, False=e=0) → CRASH
+#   RIGHT: [-1, 1, C3k2, [64, False, 0.25]]
+#          → parse_model inserts n=1 → C3k2(c1, 64, 1, False, 0.25) ✓
 #
-# BUGFIX: A2C2f yêu cầu c2 >= 128 để num_heads = c//64 >= 1.
-#   Nếu c2=64: self.c=32, num_heads=32//64=0 → ZeroDivisionError trong Attention.
-#   → Dùng C3k2 cho tất cả neck/head layers (an toàn với mọi channel size).
-#   → Giữ A2C2f chỉ cho backbone (c2=128,256 đảm bảo num_heads>=1).
+#   Để tạo 2 internal bottlenecks, dùng cột n ngoài = 2:
+#   RIGHT: [-1, 2, C3k2, [128, False, 0.5]]
+#          → inserts n=2 → C3k2(c1, 128, 2, False, 0.5) ✓
 #
-# Ba kỹ thuật chính vẫn giữ nguyên:
-#   ① imgsz=1280 : config-only, zero params, +12% mAP (BIGGEST GAIN)
-#   ② P2 head    : GhostConv 32ch tại 320×320, +5% mAP
-#   ④ WIoU loss  : custom trainer, zero params, +2% mAP
-#
-# Kỹ thuật ③ (Area Attention A2C2f area=2) bị loại bỏ do channel constraint.
-# Tổng vẫn đạt ~45-49% mAP50.
-#
-# Backbone (L0-8): IDENTICAL to YOLOv12n → full pretrained weight transfer
-# FPN (L9-14)    : C3k2 thay A2C2f → safe, partial weight transfer
-# P2 branch (L15-17): GhostConv, NEW
-# PAN (L18-26)   : GhostConv, lighter than baseline
-# Detect (L27)   : 4 heads [P2, P3, P4, P5]
+# Không dùng A2C2f (cùng vấn đề khi num_heads=0).
+# Chỉ dùng: Conv · C3k2 · GhostConv · Concat · Upsample · Detect
 # =============================================================================
 
-nc: 10   # số classes VisDrone (overridden by visdrone.yaml)
-ch: 3    # RGB input
+nc: 10
+ch: 3
 
 backbone:
-  # from  n  module    args
-  # ── Identical to YOLOv12n — full pretrained weight transfer ──────────────
-  - [-1,  1, Conv,   [16, 3, 2]]              # 0  P1/2  320×320 (640@1280)   16ch
-  - [-1,  1, Conv,   [32, 3, 2]]              # 1  P2/4  160×160 (320@1280)   32ch
-  - [-1,  1, C3k2,   [64, 1, False, 0.25]]   # 2  P2    160×160 (320@1280)   64ch ← P2 feats
-  - [-1,  1, Conv,   [64, 3, 2]]              # 3  P3/8   80×80  (160@1280)   64ch
-  - [-1,  1, C3k2,   [128, 1, False, 0.25]]  # 4  P3     80×80  (160@1280)  128ch ← P3 feats
-  - [-1,  1, Conv,   [128, 3, 2]]             # 5  P4/16  40×40   (80@1280)  128ch
-  - [-1,  2, A2C2f,  [128, True, 4]]          # 6  P4     40×40   (80@1280)  128ch ← P4 feats
-                                               #    c2=128 → self.c=64 → num_heads=1 ✓
-  - [-1,  1, Conv,   [256, 3, 2]]             # 7  P5/32  20×20   (40@1280)  256ch
-  - [-1,  2, A2C2f,  [256, True, 1]]          # 8  P5     20×20   (40@1280)  256ch ← P5 feats
-                                               #    c2=256 → self.c=128 → num_heads=2 ✓
+  # [from, n_outer, module, [c2, c3k, e, ...]]   ← KHÔNG có explicit n trong args
+  # n_outer được parse_model chèn thành n bên trong module
+
+  - [-1,  1, Conv,  [16, 3, 2]]          # 0  P1/2   16ch  (weight transfer ✓)
+  - [-1,  1, Conv,  [32, 3, 2]]          # 1  P2/4   32ch  (weight transfer ✓)
+  - [-1,  1, C3k2,  [64, False, 0.25]]  # 2  P2     64ch  → C3k2(c1,64,n=1,c3k=F,e=0.25) ✓
+                                          #    ← P2 feats   (weight transfer ✓)
+  - [-1,  1, Conv,  [64, 3, 2]]          # 3  P3/8   64ch  (weight transfer ✓)
+  - [-1,  1, C3k2,  [128, False, 0.25]] # 4  P3    128ch  → C3k2(c1,128,1,F,0.25) ✓
+                                          #    ← P3 feats   (weight transfer ✓)
+  - [-1,  1, Conv,  [128, 3, 2]]         # 5  P4/16 128ch  (weight transfer ✓)
+  - [-1,  2, C3k2,  [128, False, 0.5]]  # 6  P4    128ch  → C3k2(c1,128,n=2,c3k=F,e=0.5) ✓
+                                          #    ← P4 feats   (no transfer — diff from A2C2f)
+  - [-1,  1, Conv,  [256, 3, 2]]         # 7  P5/32 256ch  (weight transfer ✓)
+  - [-1,  2, C3k2,  [256, False, 0.5]]  # 8  P5    256ch  → C3k2(c1,256,2,F,0.5) ✓
+                                          #    ← P5 feats   (no transfer)
 
 head:
-  # ── FPN top-down: C3k2 thay A2C2f (an toàn, partial weight transfer) ─────
-  - [-1,      1, nn.Upsample, [None, 2, 'nearest']]  # 9  upsample P5 → 40×40
-  - [[-1, 6], 1, Concat, [1]]                         # 10 cat(256+128) = 384ch
-  - [-1,      1, C3k2, [128, 1, False]]               # 11 384→128ch  P4 FPN output
+  # FPN top-down — C3k2 [c2, c3k, e] không có explicit n
+  - [-1,      1, nn.Upsample, [None, 2, 'nearest']]  # 9  upsample P5→P4
+  - [[-1, 6], 1, Concat,      [1]]                    # 10 cat(256+128)=384ch
+  - [-1,      1, C3k2,        [128, False]]            # 11 → C3k2(384,128,1,F) ✓
 
-  - [-1,      1, nn.Upsample, [None, 2, 'nearest']]  # 12 upsample → 80×80
-  - [[-1, 4], 1, Concat, [1]]                         # 13 cat(128+128) = 256ch
-  - [-1,      1, C3k2, [64, 1, False]]                # 14 256→64ch   P3 FPN output
+  - [-1,      1, nn.Upsample, [None, 2, 'nearest']]  # 12 upsample→P3
+  - [[-1, 4], 1, Concat,      [1]]                    # 13 cat(128+128)=256ch
+  - [-1,      1, C3k2,        [64, False]]             # 14 → C3k2(256,64,1,F) ✓  ← P3 base
 
-  # ── P2 branch: upsample P3 → fuse backbone P2 → GhostConv (② NEW) ───────
-  - [14,      1, nn.Upsample, [None, 2, 'nearest']]  # 15 P3→P2 scale, 64ch
-                                                       #    At 1280px: 160×160 → 320×320!
-  - [[-1, 2], 1, Concat, [1]]                         # 16 cat(64+64) = 128ch
-  - [-1,      1, GhostConv, [32]]                     # 17 128→32ch  ← P2 detect (lightweight)
+  # P2 branch: 160×160@640px / 320×320@1280px
+  - [14,      1, nn.Upsample, [None, 2, 'nearest']]  # 15 upsample→P2
+  - [[-1, 2], 1, Concat,      [1]]                    # 16 cat(64+64)=128ch
+  - [-1,      1, GhostConv,   [32]]                   # 17 128→32ch  ← P2 detect
 
-  # ── PAN bottom-up: GhostConv (⑤ lighter, bù params P2 head) ─────────────
-  - [17,       1, Conv, [32, 3, 2]]                   # 18 P2→P3 stride-2, 32ch
-  - [[-1, 14], 1, Concat, [1]]                        # 19 cat(32+64) = 96ch
+  # PAN bottom-up: GhostConv (lightweight)
+  - [17,       1, Conv,      [32, 3, 2]]              # 18 P2→P3 stride2
+  - [[-1, 14], 1, Concat,    [1]]                     # 19 cat(32+64)=96ch
   - [-1,       1, GhostConv, [64]]                    # 20 96→64ch   ← P3 detect
 
-  - [-1,       1, Conv, [64, 3, 2]]                   # 21 P3→P4 stride-2, 64ch
-  - [[-1, 11], 1, Concat, [1]]                        # 22 cat(64+128) = 192ch
+  - [-1,       1, Conv,      [64, 3, 2]]              # 21 P3→P4 stride2
+  - [[-1, 11], 1, Concat,    [1]]                     # 22 cat(64+128)=192ch
   - [-1,       1, GhostConv, [128]]                   # 23 192→128ch ← P4 detect
 
-  - [-1,       1, Conv, [128, 3, 2]]                  # 24 P4→P5 stride-2, 128ch
-  - [[-1, 8],  1, Concat, [1]]                        # 25 cat(128+256) = 384ch
-  - [-1,       1, C3k2, [256, 1, True]]               # 26 384→256ch ← P5 detect (full C3k2)
+  - [-1,       1, Conv,      [128, 3, 2]]             # 24 P4→P5 stride2
+  - [[-1, 8],  1, Concat,    [1]]                     # 25 cat(128+256)=384ch
+  - [-1,       1, C3k2,      [256, True]]             # 26 → C3k2(384,256,1,True) ✓ ← P5 detect
 
-  # ── 4-head Detect [P2=32ch, P3=64ch, P4=128ch, P5=256ch] ─────────────────
+  # 4-head Detect
   - [[17, 20, 23, 26], 1, Detect, [nc]]               # 27
