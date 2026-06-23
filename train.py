@@ -288,6 +288,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--workers",    type=int,   default=None)
     p.add_argument("--pretrained", default=None,
                    help="Pretrained weights path (override config)")
+    p.add_argument("--seed",       type=int,   default=None, help="Random seed for reproducibility")
+    p.add_argument("--deterministic", action="store_true", default=None, help="Enable deterministic training mode")
 
     # Project / experiment name
     p.add_argument("--project",  default=None, help="Runs folder")
@@ -355,6 +357,8 @@ def main() -> None:
     if args.name:        cfg.name        = args.name
     if args.test_every is not None:
         cfg.test_every_n_epochs = args.test_every
+    if args.seed is not None:          cfg.seed = args.seed
+    if args.deterministic is not None:  cfg.deterministic = args.deterministic
 
     logger.info(f"Config:\n{OmegaConf.to_yaml(cfg)}")
 
@@ -422,6 +426,8 @@ def main() -> None:
     if cfg.get("weight_decay"):  extra_kwargs["weight_decay"] = float(cfg.weight_decay)
     if cfg.get("warmup_epochs"): extra_kwargs["warmup_epochs"] = float(cfg.warmup_epochs)
     if cfg.get("label_smoothing"): extra_kwargs["label_smoothing"] = float(cfg.label_smoothing)
+    if cfg.get("seed") is not None:          extra_kwargs["seed"]          = int(cfg.seed)
+    if cfg.get("deterministic") is not None:  extra_kwargs["deterministic"] = bool(cfg.deterministic)
 
     logger.info(f"Starting training → {project_dir}/{experiment_name}")
 
